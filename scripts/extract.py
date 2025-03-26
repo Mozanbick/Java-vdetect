@@ -46,7 +46,9 @@ def get_hunk_lines(commit_hash: str, file_path: str, repo_path: str) -> Tuple[Li
         - new_lines: 新版本新增的具体行号（每个 `+` 行）
     """
     # repo_path = "E:/dachuang2024/tmp/tmp/hadoop"
-    os.chdir(repo_path)
+    # print("Current working directory:", os.getcwd())
+    # if(repo_path != os.getcwd()):
+    #      os.chdir(repo_path)
     cmd = ["git", "diff", commit_hash + "^!", "--", file_path]
     diff_output = subprocess.run(cmd, capture_output=True, text=True).stdout
     lines = diff_output.split("\n")
@@ -202,7 +204,9 @@ def extract_method_ranges(file_content: str) -> List[Tuple[str, int, int]]:
 def get_file_content(commit_hash: str, file_path: str, repo_path: str) -> str:
     """获取指定 commit 版本的 Java 文件内容"""
     # repo_path = "E:/dachuang2024/tmp/tmp/hadoop"
-    os.chdir(repo_path)
+    # print("Current working directory:", os.getcwd())
+    # if(repo_path != os.getcwd()):
+    #     os.chdir(repo_path)
     cmd = ["git", "show", f"{commit_hash}:{file_path}"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.stdout if result.returncode == 0 else ""

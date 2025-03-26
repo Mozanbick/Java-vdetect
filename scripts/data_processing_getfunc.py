@@ -7,6 +7,7 @@ import json
 import csv
 import data_processing as dp
 import extract as ex
+from collections import defaultdict
 warnings.simplefilter('ignore', FutureWarning)
 
 JAVA_LANGUAGE = Language('build/my-languages.so', 'java')
@@ -26,6 +27,12 @@ def run_command(command):
     
     return result.stdout
 
+def repo_path_exists(base_repo_path, repo_path):
+    # 计算 repo_path 在 base_repo_path 下的绝对路径
+    absolute_repo_path = os.path.join(base_repo_path, repo_path)
+
+    # 判断路径是否真实存在
+    return os.path.exists(absolute_repo_path)
 
 def get_file_paths(repo_path, commit_hash):
     """
@@ -130,38 +137,38 @@ def extract_functions(content):
     
     return functions
 
-def main_process(commit_hash,repo_path,index,output_file_path):
+def main_process(commit_hash, repo_path, index, output_file_path):
     """
     主函数：从每个commit里提取出修改函数和未修改函数。
-    
+
     :param commit_hash: 提交哈希值
     :param repo_path: 在本地的代码库路径
     :param index: 编号，用于记录函数的编号
     """
-    file_paths = get_file_paths(repo_path,commit_hash)  # 获取所有修改文件路径(相对于其所在仓库)
-    
-    
+    #切换到脚本所在目录
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    os.chdir(script_dir)
 
+    file_paths = get_file_paths(repo_path, commit_hash)  # 获取所有修改文件路径(相对于其所在仓库)
+    
+    # 此时的路径为repo_path
+    modified_function_names = defaultdict(list)  # 存储修改的函数名和行号
+    
     # 逐个处理文件
     for file_path in file_paths:
-        print(f"Processing file: {file_path}")
-        content = ex.get_file_content(commit_hash, file_path,repo_path)  # 获取文件内容
-        parent_content = ex.get_file_content(f'{commit_hash}^', file_path,repo_path)  # 获取父提交版本的文件内容
-        modified_function_names = get_modified_functions(commit_hash, file_path, repo_path)  # 获取被修改的函数名称(字典，键为函数名，值为修改的行号列表)
-        parent_functions = extract_functions(parent_content)  # 提取父提交中的所有函数定义
+        
+        
+        if(file_path.endswith('java')):
+            print(f"Processing file: {file_path}")
+            content = ex.get_file_content(commit_hash, file_path, repo_path)  # 获取文件内容
+            parent_content = ex.get_file_content(f'{commit_hash}^', file_path, repo_path)  # 获取父提交版本的文件内容
+            modified_function_names.update(get_modified_functions(commit_hash, file_path, repo_path))  # 获取被修改的函数名称(字典，键为函数名，值为修改的行号列表)
+            parent_functions = extract_functions(parent_content)  # 提取父提交中的所有函数定义
 
-        # 将修改的函数和未修改的函数写入文件
-
-        #切换到脚本所在目录
-        script_path = os.path.abspath(__file__)
-        script_dir = os.path.dirname(script_path)
-        os.chdir(script_dir)
-
-        # 打开文件以写入模式
-        with open(output_file_path, 'w', encoding='utf-8') as file:
+            # 处理每个文件中的函数
             for func_name, func_body in parent_functions.items():
-                index+=1
-                #print("文件里获得的函数名", func_name)
+                index += 1
                 # 判断函数是否被修改
                 if func_name in modified_function_names:
                     is_modified = 1 
@@ -175,33 +182,52 @@ def main_process(commit_hash,repo_path,index,output_file_path):
                     'target': is_modified,
                     'flaw_line_index': modified_function_names[func_name] if is_modified else None
                 }
-                # print(is_modified)
-                # 将字典转换为JSON字符串并写入文件
-                file.write(json.dumps(function_info) + '\n')
-        
+                # 将字典添加到待写入的函数信息列表
+                yield function_info  # 使用生成器返回每个函数的信息
+        else:
+            continue
 
 
 
 def main(input_file_path, output_file_path, base_path):
+    index = 0
+    function_info_list = []
 
     with open(input_file_path, 'r', encoding='utf-8') as csvfile:
         reader = csv.reader(csvfile)
         urls = [row[3] for row in reader]
 
-    index = 0
     # 处理每个url
-    for i,url in enumerate(urls, start=1):
+    for i, url in enumerate(urls, start=1):
         match = re.search(r'/([^/]+/[^/]+)/commit/', url)
         if not match:
             print(f"URL {url} does not match the expected pattern.")
             continue
 
-        repository_name = match.group(1) #user/repo,如：hadoop/hadoop-common
-        repo = re.search(r'[^/]+$', repository_name).group() #repo,如：hadoop-common
+        repository_name = match.group(1)  # user/repo,如：hadoop/hadoop-common
+        repo = re.search(r'[^/]+$', repository_name).group()  # repo,如：hadoop-common
         commit_hash = url.split('/')[-1]
+
+        repo_path = os.path.join(base_path, repo)  # 得到仓库的本地克隆目录
         
-        repo_path = os.path.join(base_path, repo) #得到仓库的本地克隆目录
-        main_process(commit_hash,repo_path,index,output_file_path)
+        if(repo_path_exists("/data/vdetect/repo",repo)==False):
+            print(f"{repo}不在仓库里")
+            continue
+
+        # 处理每个commit
+        for function_info in main_process(commit_hash, repo_path, index, output_file_path):
+            function_info_list.append(function_info)
+
+    #切换到脚本所在目录
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    os.chdir(script_dir)
+
+    # 写入文件
+    with open(output_file_path, 'w', encoding='utf-8') as output_file:
+        for function_info in function_info_list:
+            output_file.write(json.dumps(function_info) + '\n')
+
 
 if __name__ == '__main__':
     # 思路：对每个url，读取其commit_hash，以及仓库名repo
@@ -210,9 +236,9 @@ if __name__ == '__main__':
     # 对于仓库中的其他未修改文件(不在modified_file_path里的），遍历仓库获得这些文件的file_path，直接调用extract_functions函数，将结果写进jsonl文件里
     
     # ！！！！！！换一个思路：找到所有修改块（根据@@里的行号信息），然后到原文件中寻找修改块所在函数。  已解决
-    input_csv = r'dataset\input.csv' #输入文件                                         
-    output_file_path = r'dataset\output_getfunc_test.jsonl' #输出文件
-    base_path='E:\\dachuang2024\\tmp\\tmp' #存放所有仓库的地方
+    input_csv = r'dataset/veracode_fliter.csv' #输入文件                                         
+    output_file_path = r'dataset/output_getfunc_test.jsonl' #输出文件
+    base_path='../repo' #存放所有仓库的地方
     main(input_csv, output_file_path,base_path)
     print("结果已写入文件{output_file_path}.")                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
 
